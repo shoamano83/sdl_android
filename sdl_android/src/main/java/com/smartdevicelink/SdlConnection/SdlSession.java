@@ -24,7 +24,9 @@ import com.smartdevicelink.proxy.LockScreenManager;
 import com.smartdevicelink.proxy.RPCRequest;
 import com.smartdevicelink.security.ISecurityInitializedListener;
 import com.smartdevicelink.security.SdlSecurityBase;
+import com.smartdevicelink.streaming.AbstractPacketizer;
 import com.smartdevicelink.streaming.IStreamListener;
+import com.smartdevicelink.streaming.RTPH264Packetizer;
 import com.smartdevicelink.streaming.StreamPacketizer;
 import com.smartdevicelink.streaming.StreamRPCPacketizer;
 import com.smartdevicelink.transport.BaseTransportConfig;
@@ -46,7 +48,7 @@ public class SdlSession implements ISdlConnectionListener, IHeartbeatMonitorList
     private LockScreenManager lockScreenMan  = new LockScreenManager();
     private SdlSecurityBase sdlSecurity = null;    
 	StreamRPCPacketizer mRPCPacketizer = null;
-	StreamPacketizer mVideoPacketizer = null;
+	AbstractPacketizer mVideoPacketizer = null;
 	StreamPacketizer mAudioPacketizer = null;
 	SdlEncoder mSdlEncoder = null;
 	private final static int BUFF_READ_SIZE = 1024;
@@ -134,8 +136,9 @@ public class SdlSession implements ISdlConnectionListener, IHeartbeatMonitorList
 	public void startStream(InputStream is, SessionType sType, byte rpcSessionID) throws IOException {
         if (sType.equals(SessionType.NAV))
         {
-        	mVideoPacketizer = new StreamPacketizer(this, is, sType, rpcSessionID, this);
-        	mVideoPacketizer.sdlConnection = this.getSdlConnection();
+        	StreamPacketizer packetizer = new StreamPacketizer(this, is, sType, rpcSessionID, this);
+        	packetizer.sdlConnection = this.getSdlConnection();
+        	mVideoPacketizer = packetizer;
         	mVideoPacketizer.start();
         }
         else if (sType.equals(SessionType.PCM))
@@ -157,8 +160,9 @@ public class SdlSession implements ISdlConnectionListener, IHeartbeatMonitorList
 		}
         if (sType.equals(SessionType.NAV))
         {
-            mVideoPacketizer = new StreamPacketizer(this, is, sType, rpcSessionID, this);
-            mVideoPacketizer.sdlConnection = this.getSdlConnection();
+            StreamPacketizer packetizer = new StreamPacketizer(this, is, sType, rpcSessionID, this);
+            packetizer.sdlConnection = this.getSdlConnection();
+            mVideoPacketizer = packetizer;
             mVideoPacketizer.start();
         }       
         else if (sType.equals(SessionType.PCM))
@@ -284,18 +288,34 @@ public class SdlSession implements ISdlConnectionListener, IHeartbeatMonitorList
 	
 	public Surface createOpenGLInputSurface(int frameRate, int iFrameInterval, int width,
 			int height, int bitrate, SessionType sType, byte rpcSessionID) {
+		PipedOutputStream stream = null;
+		RTPH264Packetizer rtpPacketizer = null;
+		boolean useRTP = false;
+
 		try {
-			PipedOutputStream stream = (PipedOutputStream) startStream(sType, rpcSessionID);
-			if (stream == null) return null;
-			mSdlEncoder = new SdlEncoder();
-			mSdlEncoder.setFrameRate(frameRate);
-			mSdlEncoder.setFrameInterval(iFrameInterval);
-			mSdlEncoder.setFrameWidth(width);
-			mSdlEncoder.setFrameHeight(height);
-			mSdlEncoder.setBitrate(bitrate);
-			mSdlEncoder.setOutputStream(stream);
+			if (useRTP) {
+				rtpPacketizer = new RTPH264Packetizer(this, sType, rpcSessionID, this);
+				mVideoPacketizer = rtpPacketizer;
+				mVideoPacketizer.start();
+			} else {
+				stream = (PipedOutputStream) startStream(sType, rpcSessionID);
+				if (stream == null) return null;
+			}
 		} catch (IOException e) {
 			return null;
+		}
+
+		mSdlEncoder = new SdlEncoder();
+		mSdlEncoder.setFrameRate(frameRate);
+		mSdlEncoder.setFrameInterval(iFrameInterval);
+		mSdlEncoder.setFrameWidth(width);
+		mSdlEncoder.setFrameHeight(height);
+		mSdlEncoder.setBitrate(bitrate);
+
+		if (useRTP) {
+			mSdlEncoder.setOutputListener(rtpPacketizer);
+		} else {
+			mSdlEncoder.setOutputStream(stream);
 		}
 		return mSdlEncoder.prepareEncoder();
 	}
